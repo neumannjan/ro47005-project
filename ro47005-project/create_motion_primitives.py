@@ -68,6 +68,8 @@ if __name__ == "__main__":
         Configuration(n_seconds=1., forward_speed=1., steering_angle=0.),
         Configuration(n_seconds=1., forward_speed=1., steering_angle=0.2),
         Configuration(n_seconds=1., forward_speed=1., steering_angle=0.4),
+        Configuration(n_seconds=1., forward_speed=1., steering_angle=0.6),
+        Configuration(n_seconds=1., forward_speed=1., steering_angle=0.95),
     ]
 
     for conf in tqdm(CONFIGURATIONS):
