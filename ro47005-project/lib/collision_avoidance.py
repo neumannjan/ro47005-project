@@ -7,14 +7,6 @@ from lib.helpers import measure_time
 from lib.trajectories import car_trajectory_to_collision_point_trajectories
 
 
-def _combine_rowwise_repeat(arrays_2d: List[np.ndarray], repeats=1) -> Tuple[int, np.ndarray]:
-    n = len(arrays_2d) * repeats
-    arr = np.concatenate([*arrays_2d] * repeats, axis=1)
-    a, b = arr.shape
-    arr = arr.reshape((a * n, b // n))
-    return n, arr
-
-
 def _pad_trajectory(traj: np.ndarray, n_iterations: int) -> np.ndarray:
     if len(traj) < n_iterations:
         return np.vstack([traj, np.repeat(traj[-1:, :], n_iterations - len(traj), axis=0)])
@@ -29,62 +21,47 @@ def _pad_trajectories(traj_agent: np.ndarray, trajs_o: List[np.ndarray]):
     return traj_agent, trajs_o
 
 
-def _get_rowwise_diffs(car_dimensions, traj_agent: np.ndarray, traj_obstacles: List[np.ndarray]):
-    n_circle_centers = len(car_dimensions.circle_centers)
+def _find_intersections(traj1: np.ndarray, traj2: np.ndarray, diff_threshold: float) -> Tuple[np.ndarray, np.ndarray]:
+    # this function is right now pretty dumb
+    # computes distances between each point on traj1 with each point on traj2
+
+    mask = np.linalg.norm(traj1[None, :, :2] - traj2[:, None, :2], axis=2) <= diff_threshold
+
+    mask1 = np.any(mask, axis=0)
+    mask2 = np.any(mask, axis=1)
+
+    return mask1, mask2
+
+
+def _get_first_idx(mask: np.ndarray):
+    idx = np.argmax(mask)
+    if not mask[idx]:
+        return None
+    return idx
+
+
+def _find_first_intersection_idx(traj1: np.ndarray, traj2: np.ndarray, diff_threshold: float):
+    mask1, _ = _find_intersections(traj1, traj2, diff_threshold)
+    return _get_first_idx(mask1)
+
+
+def check_collision_moving_cars(traj_agent: np.ndarray,
+                                traj_obstacles: List[np.ndarray], diff_threshold: float) -> Optional[
+    Tuple[float, float]]:
 
     traj_agent, traj_obstacles = _pad_trajectories(traj_agent, traj_obstacles)
 
-    rows_per_frame_ag, cc_pts_ag = _combine_rowwise_repeat(
-        [tr[:, :2] for tr in car_trajectory_to_collision_point_trajectories(traj_agent, car_dimensions)], repeats=1)
-    rows_per_frame_ag *= n_circle_centers * len(traj_obstacles)
-    cc_pts_ag = np.repeat(cc_pts_ag, len(traj_obstacles) * n_circle_centers, axis=0)
-    rows_per_frame_obs, cc_pts_obs = _combine_rowwise_repeat(
-        [cc_tr[:, :2] for tr in traj_obstacles for cc_tr in
-         car_trajectory_to_collision_point_trajectories(tr, car_dimensions)], repeats=n_circle_centers)
-    assert rows_per_frame_ag == rows_per_frame_obs
-    diff_pts = cc_pts_obs - cc_pts_ag
-    print("Number of point pairs:", len(diff_pts))
-    return rows_per_frame_ag, diff_pts
+    min_idx = None
+    for traj_obstacle in traj_obstacles:
+        idx = _find_first_intersection_idx(traj_agent, traj_obstacle, diff_threshold)
+        if idx is not None and (min_idx is None or idx < min_idx):
+            min_idx = idx
 
-
-def _offset_trajectories_by_frames(trajs: List[np.ndarray], offsets: Union[List[int], np.ndarray]) -> List[np.ndarray]:
-    out = []
-
-    for traj in trajs:
-        for idx_offset in offsets:
-            if idx_offset < 0:
-                obst2 = np.concatenate([traj[-idx_offset:], np.repeat(traj[-1:, :], repeats=-idx_offset, axis=0)],
-                                       axis=0)
-            elif idx_offset > 0:
-                obst2 = np.concatenate([np.repeat(traj[0:1], repeats=idx_offset, axis=0), traj[:-idx_offset]], axis=0)
-            else:
-                obst2 = traj
-            out.append(obst2)
-
-    return out
-
-
-def check_collision_moving_cars(car_dimensions: CarDimensions, traj_agent: np.ndarray,
-                                traj_obstacles: List[np.ndarray], frame_window: int = 0) -> Optional[
-    Tuple[float, float, float]]:
-    offsets = np.array(range(-frame_window, frame_window + 1, 1))
-    traj_obstacles = _offset_trajectories_by_frames(traj_obstacles, offsets=offsets)
-
-    min_distance = 2 * car_dimensions.radius
-
-    rows_per_frame, diff_pts = _get_rowwise_diffs(car_dimensions, traj_agent, traj_obstacles)
-
-    diff_pts = np.linalg.norm(diff_pts, axis=1) <= min_distance
-    # print("Total point pairs to collision-check:", len(diff_pts))
-    first_row_idx = np.argmax(diff_pts)
-
-    if not diff_pts[first_row_idx]:
-        # no collision
+    if min_idx is None:
         return None
 
-    first_frame_idx = first_row_idx // rows_per_frame
-    x, y = traj_agent[first_frame_idx, :2]
-    return x, y, first_frame_idx
+    x, y = traj_agent[min_idx, :2]
+    return x, y
 
 
 def get_cutoff_curve_by_position_idx(points: np.ndarray, x: float, y: float, radius: float = 0.001) -> int:

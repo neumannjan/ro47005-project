@@ -1,4 +1,5 @@
 import itertools
+import math
 from typing import List
 
 import numpy as np
@@ -7,8 +8,7 @@ from matplotlib import pyplot as plt
 from envs.t_intersection import t_intersection
 from examples.moving_obstacle_avoidance import plot_trajectories
 from lib.car_dimensions import CarDimensions, BicycleModelDimensions
-from lib.collision_avoidance import check_collision_moving_cars, get_cutoff_curve_by_position_idx, \
-    _offset_trajectories_by_frames
+from lib.collision_avoidance import check_collision_moving_cars, get_cutoff_curve_by_position_idx
 from lib.motion_primitive import load_motion_primitives
 from lib.motion_primitive_search import MotionPrimitiveSearch
 from lib.moving_obstacles import MovingObstacleTIntersection
@@ -38,16 +38,9 @@ def visualize_mpc(mpc: MPC, state: State, history: History, car_dimensions: CarD
 
 def visualize_frame(dt, frame_window, car_dimensions, collision_xy, i, moving_obstacles, mpc, scenario, simulation,
                     state, tmp_trajectory, trajectory_res, trajs_moving_obstacles):
-    trajs_o = _offset_trajectories_by_frames(trajs_moving_obstacles,
-                                             list(range(-frame_window, frame_window + 1, 1)))
-    trajs_agent = [trajectory_res]
-    cc_trajs_agent = [car_trajectory_to_collision_point_trajectories(tr, car_dimensions) for tr in trajs_agent]
-    cc_trajs_o = [car_trajectory_to_collision_point_trajectories(tr, car_dimensions) for tr in trajs_o]
     if i >= 0:
-        for j in range(len(trajs_moving_obstacles[0]) if collision_xy is None else collision_xy[2] + 1):
+        for j in range(len(trajs_moving_obstacles[0])):
             plt.cla()
-            plot_trajectories(cc_trajs_agent, cc_trajs_o, radius=car_dimensions.radius, i=j)
-
             plt.plot(tmp_trajectory[:, 0], tmp_trajectory[:, 1], color='k')
 
             plt.scatter([state.x], [state.y], color='r')
@@ -81,7 +74,7 @@ def main():
     DT = 0.2
 
     moving_obstacles: List[MovingObstacleTIntersection] = [
-        MovingObstacleTIntersection(car_dimensions, direction=1, turning=True, speed=15 / 3.6, dt=DT),
+        MovingObstacleTIntersection(car_dimensions, direction=1, turning=False, speed=15 / 3.6, dt=DT),
         MovingObstacleTIntersection(car_dimensions, direction=-1, turning=False, speed=15 / 3.6, dt=DT),
     ]
 
@@ -109,7 +102,8 @@ def main():
     #########
     TIME_HORIZON = 5.
     FRAME_WINDOW = 6
-    EXTRA_CUTOFF_MARGIN = int(car_dimensions.radius / dl)  # no. of frames
+    EXTRA_CUTOFF_MARGIN = 4 * int(
+        math.ceil(car_dimensions.radius / dl))  # no. of frames - corresponds approximately to car length
 
     traj_agent_idx = 0
 
@@ -122,15 +116,15 @@ def main():
                                                          start_index=traj_agent_idx, forward=True)
         trajectory_res = trajectory[traj_agent_idx:]
 
-        # resample the trajectory to correspond to a car that starts from its current speed and accelerates
+        # compute trajectory to correspond to a car that starts from its current speed and accelerates
         # as much as it can -> this is a prediction for our own agent
-        if state.v < Simulation.MAX_SPEED:
-            resample_dl = np.zeros((trajectory_res.shape[0],)) + MAX_ACCEL
-            resample_dl = np.cumsum(resample_dl) + state.v
-            resample_dl = DT * np.minimum(resample_dl, Simulation.MAX_SPEED)
-            trajectory_res = resample_curve(trajectory_res, dl=resample_dl)
-        else:
-            trajectory_res = resample_curve(trajectory_res, dl=DT * Simulation.MAX_SPEED)
+        # if state.v < Simulation.MAX_SPEED:
+        #     resample_dl = np.zeros((trajectory_res.shape[0],)) + MAX_ACCEL
+        #     resample_dl = np.cumsum(resample_dl) + state.v
+        #     resample_dl = DT * np.minimum(resample_dl, Simulation.MAX_SPEED)
+        #     trajectory_res = resample_curve(trajectory_res, dl=resample_dl)
+        # else:
+        #     trajectory_res = resample_curve(trajectory_res, dl=DT * Simulation.MAX_SPEED)
 
         # predict the movement of each moving obstacle, and retrieve the predicted trajectories
         trajs_moving_obstacles = [
@@ -139,8 +133,8 @@ def main():
             for o in moving_obstacles]
 
         # find the collision location
-        collision_xy = check_collision_moving_cars(car_dimensions, trajectory_res, trajs_moving_obstacles,
-                                                   frame_window=FRAME_WINDOW)
+        collision_xy = check_collision_moving_cars(trajectory_res, trajs_moving_obstacles,
+                                                   diff_threshold=car_dimensions.radius)
 
         # cutoff the curve such that it ends right before the collision (and some margin)
         if collision_xy is not None:
